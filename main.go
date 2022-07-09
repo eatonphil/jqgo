@@ -295,6 +295,7 @@ func extractArrayDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 		return nil, fmt.Errorf("Expected opening bracket, got: '%s'", string(b))
 	}
 
+	var result any
 	i := -1
 	for {
 		i++
@@ -309,7 +310,7 @@ func extractArrayDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 			return nil, err
 		}
 
-		if bs[0] == '}' {
+		if bs[0] == ']' {
 			_, err := r.ReadByte()
 			if err != nil {
 				return nil, err
@@ -345,10 +346,13 @@ func extractArrayDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 			continue
 		}
 
-		return expectValue(r, path[1:])
+		result, err = expectValue(r, path[1:])
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	return nil, nil
+	return result, nil
 }
 
 func extractDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
@@ -371,6 +375,8 @@ func extractDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 	}
 
 	i := -1
+
+	var result any
 	for {
 		i++
 
@@ -448,11 +454,13 @@ func extractDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 			continue
 		}
 
-		return expectValue(r, path[1:])
+		result, err = expectValue(r, path[1:])
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	// Path not found
-	return nil, nil
+	return result, nil
 }
 
 func main() {
@@ -466,16 +474,26 @@ func main() {
 
 		nonFlagArgs = append(nonFlagArgs, arg)
 	}
+
+	path := strings.Split(nonFlagArgs[0], ".")
+	if path[0] == "" {
+		path = path[1:]
+	}
 	
 	b := bufio.NewReader(os.Stdin)
-	val, err := extractDataFromJsonPath(b, strings.Split(nonFlagArgs[0], "."))
-	if err != nil && err != io.EOF {
-		log.Fatalln(err)
-	}
+	for {
+		val, err := extractDataFromJsonPath(b, path)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Fatalln(err)
+		}
 
-	enc := json.NewEncoder(os.Stdout)
-	err = enc.Encode(val)
-	if err != nil {
-		log.Fatalln(err)
+		enc := json.NewEncoder(os.Stdout)
+		err = enc.Encode(val)
+		if err != nil {
+			log.Fatalln(err)
+		}
 	}
 }
