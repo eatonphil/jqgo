@@ -10,9 +10,12 @@ And the ultimate control is `jq` itself.
 
 # Usage:
 
-```
+```bash
 $ go build
-$ cat some-file.json | ./jqgo '.some.path'
+$ cat testdata/everything.json
+{"a": "1", "x": [2,3, [99, {"aa": 12}]], "d": {"a": 2, "b": {"c": 1}, "x": {}}, "c": true, "b": 2}
+$ cat testdata/everything.json| ./jqgo 'x.0'
+2
 ```
 
 # Limitations
