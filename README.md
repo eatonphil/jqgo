@@ -1,4 +1,12 @@
-# jqgo: variations on basic Go clones of jq
+# jqgo: variations on experimental Go clones of jq
+
+The main jqgo program is a path-aware, partial-parsing JSON
+implementation.
+
+The "control" program uses Go's builtin (non-path-aware) JSON parsing
+library with a path implementation on top.
+
+And the ultimate control is `jq` itself.
 
 # Usage:
 
@@ -11,7 +19,7 @@ $ cat some-file.json | ./jqgo '.some.path'
 
 TONS!
 
-1. Can't output a JSON object currently, end of path must be a literal
+1. Can't output a JSON object or array currently, end of path must be a scalar
 1. Can't filter/map/etc
 1. Can't fetch multiple items
 
