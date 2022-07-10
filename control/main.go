@@ -1,11 +1,11 @@
 package main
 
 import (
-	"os"
-	"strconv"
+	"encoding/json"
 	"io"
 	"log"
-	"encoding/json"
+	"os"
+	"strconv"
 	"strings"
 )
 
@@ -53,7 +53,7 @@ func main() {
 	var a map[string]any
 
 	enc := json.NewEncoder(os.Stdout)
-	
+
 	for {
 		err := dec.Decode(&a)
 		if err == io.EOF {

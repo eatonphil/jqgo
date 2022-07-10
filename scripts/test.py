@@ -123,6 +123,11 @@ for t in everything_tests:
     to_run = "cat testdata/everything.json | ./jqgo " + t[0]
     test("Basic test of " + t[0], to_run, want=t[1])
 
+# Simple
+want = """1
+2"""
+test("Very simple", "cat testdata/simple.json | ./jqgo 'a'", want=want)
+    
 print(f"{tests - failures} of {tests} succeeded.")
 if failures > 0:
     sys.exit(1)

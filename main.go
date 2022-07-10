@@ -1,27 +1,26 @@
 package main
 
 import (
-	"io"
-	"strconv"
-	"log"
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"os"
+	"strconv"
 	"strings"
+
+	//"github.com/pkg/profile"
 )
 
 var DEBUG = false
 
-func debug(msg string, args... any) {
-	if !DEBUG {
-		return
-	}
-
+func _debug(msg string, args ...any) {
 	log.Printf(msg, args...)
 }
 
-func debugln(args... any) {
+func _debugln(args ...any) {
 	if !DEBUG {
 		return
 	}
@@ -29,134 +28,180 @@ func debugln(args... any) {
 	log.Println(args...)
 }
 
-func eatWhitespace(r *bufio.Reader) error {
+var debug = func(msg string, args ...any) {}
+var debugln = func(args ...any) {}
+
+type jsonReader struct {
+	read Vector[byte]
+
+	// Reused memory
+	expectStringCache     Vector[byte]
+	eatValueCache         Vector[byte]
+	expectIdentifierCache Vector[byte]
+	tryNumberHint         Vector[byte]
+	tryNumberNumber       Vector[byte]
+}
+
+func (jr *jsonReader) reset() {
+	jr.read.Reset()
+}
+
+func (jr *jsonReader) readByteRaw(r *bufio.Reader) (byte, error) {
+	c, err := r.ReadByte()
+	if err != nil {
+		return byte(0), err
+	}
+
+	jr.read.Append(c)
+
+	return c, nil
+}
+
+func (jr *jsonReader) readByte(r *bufio.Reader) (byte, error) {
+	return jr.readByteRaw(r)
+}
+
+func (jr *jsonReader) discard(r *bufio.Reader) {
+	r.Discard(1)
+}
+
+func (jr *jsonReader) peek(r *bufio.Reader) (byte, error) {
+	bs, err := r.Peek(1)
+	if err != nil {
+		return byte(0), err
+	}
+	return bs[0], err
+}
+
+func (jr *jsonReader) eatWhitespace(r *bufio.Reader) error {
 	for {
-		bs, err := r.Peek(1)
+		b, err := jr.peek(r)
 		if err != nil {
 			return err
 		}
 
-		isWhitespace := bs[0] == ' ' ||
-			bs[0] == '\n' ||
-			bs[0] == '\t' ||
-			bs[0] == '\r'
+		isWhitespace := b == ' ' ||
+			b == '\n' ||
+			b == '\t' ||
+			b == '\r'
 		if !isWhitespace {
 			return nil
 		}
 
-		_, err = r.ReadByte()
-		if err != nil {
-			return err
-		}
+		jr.discard(r)
 	}
 }
 
-func expectString(r *bufio.Reader) (string, error) {
-	err := eatWhitespace(r)
+func (jr *jsonReader) expectString(r *bufio.Reader) ([]byte, error) {
+	jr.expectStringCache.Reset()
+
+	err := jr.eatWhitespace(r)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	b, err := r.ReadByte()
+	b, err := jr.readByte(r)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	if b != '"' {
-		return "", fmt.Errorf("Expected double quote to start string, got: '%s'", string(b))
+		return nil, fmt.Errorf("Expected double quote to start string, got: '%s'", string(b))
 	}
 
-	var s []byte
 	var prev byte
 	for {
-		b, err := r.ReadByte()
+		b, err := jr.readByte(r)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 
-		if b == '"' {
+		if b == '\\' && prev == '\\' {
+			// Just skip
+			prev = byte(0)
+			continue
+		} else if b == '"' {
 			// Overwrite the escaped double quote
 			if prev == '\\' {
-				s[len(s)-1] = '"'
+				jr.expectStringCache.Insert(jr.expectStringCache.Index()-1, '"')
 			} else {
 				// Otherwise it's the actual end
 				break
 			}
 		}
 
-		s = append(s, b)
+		jr.expectStringCache.Append(b)
 		prev = b
 	}
 
-	return string(s), nil
+	return jr.expectStringCache.List(), nil
 }
 
-func expectIdentifier(r *bufio.Reader, ident string, value any) (any, error) {
-	bs, err := r.Peek(len(ident))
-	if err != nil {
-		return nil, err
+func (jr *jsonReader) expectIdentifier(r *bufio.Reader, ident []byte, value any) (any, error) {
+	jr.expectIdentifierCache.Reset()
+
+	for i := 0; i < len(ident); i++ {
+		b, err := jr.peek(r)
+		if err != nil {
+			return nil, err
+		}
+
+		jr.expectIdentifierCache.Append(b)
+
+		jr.discard(r)
 	}
 
-	if string(bs) == ident {
-		// Read everything we peeked at
-		for i := 0; i < len(ident); i++ {
-			_, err = r.ReadByte()
-			if err != nil {
-				return nil, err
-			}
-		}
+	if bytes.Equal(jr.expectIdentifierCache.List(), ident) {
 		return value, nil
 	}
 
-	return nil, fmt.Errorf("Unknown value: '%s'", string(bs))
+	return nil, fmt.Errorf("Unknown value: '%s'", string(jr.expectIdentifierCache.List()))
 }
 
-func tryNumber(r *bufio.Reader) (bool, any, error) {
-	var numberBytes []byte
-	var hint []byte
+func (jr *jsonReader) tryNumber(r *bufio.Reader) (bool, any, error) {
+	jr.tryNumberHint.Reset()
+	jr.tryNumberNumber.Reset()
 
 	for {
-		bs, err := r.Peek(1)
+		// TODO: replace this with bulk peek a la eatValue
+		c, err := jr.peek(r)
 		if err != nil {
 			return false, nil, err
 		}
 
-		c := bs[0]
-		hint = append(hint, c)
+		jr.tryNumberHint.Append(c)
 
 		isNumberCharacter := (c >= '0' && c <= '9') || c == 'e' || c == '-'
 		if !isNumberCharacter {
 			break
 		}
 
-		numberBytes = append(numberBytes, c)
+		jr.tryNumberNumber.Append(c)
 
-		_, err = r.ReadByte()
-		if err != nil {
-			return false, nil, err
-		}
+		jr.discard(r)
 	}
 
-	if len(numberBytes) == 0 {
+	if jr.tryNumberNumber.Index() == 0 {
 		return false, nil, nil
 	}
 
 	var n float64
-	err := json.Unmarshal(numberBytes, &n)
+	err := json.Unmarshal(jr.tryNumberNumber.List(), &n)
 	return true, n, err
 }
 
-func eatValue(r *bufio.Reader) error {
-	var stack []string
+func (jr *jsonReader) eatValue(r *bufio.Reader) error {
+	jr.eatValueCache.Reset()
+
 	inString := false
 	var prev byte
 
-	err := eatWhitespace(r)
+	err := jr.eatWhitespace(r)
 	if err != nil {
 		return err
 	}
 
-	ok, _, err := tryLiteral(r)
+	ok, _, err := jr.tryLiteral(r)
 	if err != nil {
 		return err
 	}
@@ -169,95 +214,120 @@ func eatValue(r *bufio.Reader) error {
 	// Otherwise it's an array or object
 	first := true
 
-	for first || len(stack) > 0 {
+	length := 0
+	var bs []byte
+	for first || jr.eatValueCache.Index() > 0 {
+		length++
 		first = false
 
-		bs, err := r.Peek(1)
-		if err != nil {
-			return err
-		}
-		b := bs[0]
-
-		if inString {
-			if b == '"' {
-				if prev == '\\' {
-					prev = b
-					continue
+		for {
+			bs, err = r.Peek(length)
+			if err == bufio.ErrBufferFull {
+				_, err = r.Discard(length - 1)
+				if err != nil {
+					return err
 				}
 
+				length = 1
+				continue
+			}
+			if err != nil {
+				return err
+			}
+
+			break
+		}
+		b := bs[length-1]
+		// b, err := jr.peek(r)
+		// if err != nil {
+		// 	return err
+		// }
+
+		if inString {
+			if b == '"' && prev != '\\' {
 				inString = false
 			}
+
+			// Two \\-es cancel eachother out
+			if b == '\\' && prev == '\\' {
+				prev = byte(0)
+			} else {
+				prev = b
+			}
+
+			//jr.discard(r)
+			continue
 		}
 
 		switch b {
 		case '[':
-			stack = append(stack, "[")
+			jr.eatValueCache.Append(b)
 		case ']':
-			if stack[len(stack)-1] != "[" {
-				return fmt.Errorf("Unexpected end of array")
+			c := jr.eatValueCache.Pop()
+			if c != '[' {
+				return fmt.Errorf("Unexpected end of array: '%s'", string(c))
 			}
-
-			stack = stack[:len(stack)-1]
 		case '{':
-			stack = append(stack, "{")
+			jr.eatValueCache.Append(b)
 		case '}':
-			if stack[len(stack)-1] != "{" {
-				return fmt.Errorf("Unexpected end of object")
+			c := jr.eatValueCache.Pop()
+			if c != '{' {
+				return fmt.Errorf("Unexpected end of object: '%s'", string(c))
 			}
-
-			stack = stack[:len(stack)-1]
 		case '"':
 			inString = true
 			// Closing quote case handled elsewhere, above
 		}
 
-		_, err = r.ReadByte()
-		if err != nil {
-			return err
-		}
-
+		//jr.discard(r)
 		prev = b
 	}
 
-	return nil
+	_, err = r.Discard(length)
+	return err
+
+	//return nil
 }
 
-func tryLiteral(r *bufio.Reader) (bool, any, error) {
-	bs, err := r.Peek(1)
+var (
+	trueBytes  = []byte("true")
+	falseBytes = []byte("false")
+	nullBytes  = []byte("null")
+)
+
+func (jr *jsonReader) tryLiteral(r *bufio.Reader) (bool, any, error) {
+	c, err := jr.peek(r)
 	if err != nil {
 		return false, nil, err
 	}
 
-	c := bs[0]
-
 	if c == '"' {
-		val, err := expectString(r)
-		return true, val, err
+		val, err := jr.expectString(r)
+		return true, string(val), err
 	} else if c == 't' {
-		val, err := expectIdentifier(r, "true", true)
+		val, err := jr.expectIdentifier(r, trueBytes, true)
 		return true, val, err
 	} else if c == 'f' {
-		val, err := expectIdentifier(r, "false", false)
+		val, err := jr.expectIdentifier(r, falseBytes, false)
 		return true, val, err
 	} else if c == 'n' {
-		val, err := expectIdentifier(r, "null", nil)
+		val, err := jr.expectIdentifier(r, nullBytes, nil)
 		return true, val, err
 	}
 
-	return tryNumber(r)
+	return jr.tryNumber(r)
 }
 
-func expectValue(r *bufio.Reader, path []string) (any, error) {
-	bs, err := r.Peek(1)
+func (jr *jsonReader) expectValue(r *bufio.Reader, path [][]byte) (any, error) {
+	c, err := jr.peek(r)
 	if err != nil {
 		return nil, err
 	}
-	c := bs[0]
 
 	if c == '{' {
-		return extractDataFromJsonPath(r, path)
+		return jr.extractDataFromJsonPath(r, path)
 	} else if c == '[' {
-		return extractArrayDataFromJsonPath(r, path)
+		return jr.extractArrayDataFromJsonPath(r, path)
 	}
 
 	// Can't go any further into a path
@@ -269,7 +339,7 @@ func expectValue(r *bufio.Reader, path []string) (any, error) {
 		return nil, nil
 	}
 
-	ok, val, err := tryLiteral(r)
+	ok, val, err := jr.tryLiteral(r)
 	if err != nil {
 		return nil, err
 	}
@@ -280,13 +350,13 @@ func expectValue(r *bufio.Reader, path []string) (any, error) {
 	return val, err
 }
 
-func extractArrayDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
-	n, err := strconv.Atoi(path[0])
+func (jr *jsonReader) extractArrayDataFromJsonPath(r *bufio.Reader, path [][]byte) (any, error) {
+	n, err := strconv.Atoi(string(path[0]))
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := r.ReadByte()
+	b, err := jr.readByte(r)
 	if err != nil {
 		return nil, err
 	}
@@ -300,53 +370,45 @@ func extractArrayDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 	for {
 		i++
 
-		err = eatWhitespace(r)
+		err = jr.eatWhitespace(r)
 		if err != nil {
 			return nil, err
 		}
 
-		bs, err := r.Peek(1)
+		b, err := jr.peek(r)
 		if err != nil {
 			return nil, err
 		}
 
-		if bs[0] == ']' {
-			_, err := r.ReadByte()
-			if err != nil {
-				return nil, err
-			}
+		if b == ']' {
+			jr.discard(r)
 			break
 		}
 
 		if i > 0 {
-			if bs[0] == ',' {
-				_, err := r.ReadByte()
-				if err != nil {
-					return nil, err
-				}
+			if b == ',' {
+				jr.discard(r)
 			} else {
-				return nil, fmt.Errorf("Expected comma between key-value pairs, got: '%s'", string(bs))
+				return nil, fmt.Errorf("Expected comma between key-value pairs, got: '%s'", string(b))
 			}
 		}
 
-		err = eatWhitespace(r)
+		err = jr.eatWhitespace(r)
 		if err != nil {
 			return nil, err
 		}
 
 		// If the key is not the start of this path, skip past this value
 		if i != n {
-			debugln("Skipping index", i)
-			err = eatValue(r)
+			err = jr.eatValue(r)
 			if err != nil {
 				return nil, err
 			}
 
-			debugln("Ate value at index", i)
 			continue
 		}
 
-		result, err = expectValue(r, path[1:])
+		result, err = jr.expectValue(r, path[1:])
 		if err != nil {
 			return nil, err
 		}
@@ -355,17 +417,17 @@ func extractArrayDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 	return result, nil
 }
 
-func extractDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
+func (jr *jsonReader) extractDataFromJsonPath(r *bufio.Reader, path [][]byte) (any, error) {
 	if len(path) == 0 {
 		return nil, nil
 	}
 
-	err := eatWhitespace(r)
+	err := jr.eatWhitespace(r)
 	if err != nil {
 		return nil, err
 	}
 
-	b, err := r.ReadByte()
+	b, err := jr.readByte(r)
 	if err != nil {
 		return nil, err
 	}
@@ -380,55 +442,46 @@ func extractDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 	for {
 		i++
 
-		err = eatWhitespace(r)
+		err = jr.eatWhitespace(r)
 		if err != nil {
 			return nil, err
 		}
 
-		bs, err := r.Peek(1)
+		b, err := jr.peek(r)
 		if err != nil {
 			return nil, err
 		}
 
-		if bs[0] == '}' {
-			_, err := r.ReadByte()
-			if err != nil {
-				return nil, err
-			}
+		if b == '}' {
+			jr.discard(r)
 			break
 		}
 
 		if i > 0 {
-			if bs[0] == ',' {
-				_, err := r.ReadByte()
-				if err != nil {
-					return nil, err
-				}
+			if b == ',' {
+				jr.discard(r)
 			} else {
-				return nil, fmt.Errorf("Expected comma between key-value pairs, got: '%s'", string(bs))
+				return nil, fmt.Errorf("Expected comma between key-value pairs, got: '%s'", string(b))
 			}
 		}
 
-		err = eatWhitespace(r)
+		err = jr.eatWhitespace(r)
 		if err != nil {
 			return nil, err
 		}
 
 		// Grab the key
-		debugln("Grabbing string")
-		s, err := expectString(r)
+		s, err := jr.expectString(r)
 		if err != nil {
 			return nil, err
 		}
 
-		debugln("Grabbed string", s)
-
-		err = eatWhitespace(r)
+		err = jr.eatWhitespace(r)
 		if err != nil {
 			return nil, err
 		}
 
-		b, err = r.ReadByte()
+		b, err = jr.readByte(r)
 		if err != nil {
 			return nil, err
 		}
@@ -437,24 +490,22 @@ func extractDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 			return nil, fmt.Errorf("Expected colon, got: '%s'", string(b))
 		}
 
-		err = eatWhitespace(r)
+		err = jr.eatWhitespace(r)
 		if err != nil {
 			return nil, err
 		}
 
 		// If the key is not the start of this path, skip past this value
-		if path[0] != s {
-			debugln("Skipping key", s)
-			err = eatValue(r)
+		if !bytes.Equal(path[0], s) {
+			err = jr.eatValue(r)
 			if err != nil {
 				return nil, err
 			}
 
-			debugln("Ate value", s)
 			continue
 		}
 
-		result, err = expectValue(r, path[1:])
+		result, err = jr.expectValue(r, path[1:])
 		if err != nil {
 			return nil, err
 		}
@@ -464,6 +515,9 @@ func extractDataFromJsonPath(r *bufio.Reader, path []string) (any, error) {
 }
 
 func main() {
+	//defer profile.Start().Stop()
+	//defer profile.Start(profile.MemProfile).Stop()
+
 	var nonFlagArgs []string
 
 	for _, arg := range os.Args[1:] {
@@ -475,22 +529,39 @@ func main() {
 		nonFlagArgs = append(nonFlagArgs, arg)
 	}
 
-	path := strings.Split(nonFlagArgs[0], ".")
-	if path[0] == "" {
-		path = path[1:]
+	if DEBUG {
+		debugln = _debugln
+		debug = _debug
 	}
-	
+
+	pathS := strings.Split(nonFlagArgs[0], ".")
+	if pathS[0] == "" {
+		pathS = pathS[1:]
+	}
+	var path [][]byte
+	for _, part := range pathS {
+		path = append(path, []byte(part))
+	}
+
 	b := bufio.NewReader(os.Stdin)
+	enc := json.NewEncoder(os.Stdout)
+
+	var jr jsonReader
+	var val any
+	var err error
+
 	for {
-		val, err := extractDataFromJsonPath(b, path)
+		jr.reset()
+
+		val, err = jr.extractDataFromJsonPath(b, path)
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			log.Println("Read", string(jr.read.List()))
 			log.Fatalln(err)
 		}
 
-		enc := json.NewEncoder(os.Stdout)
 		err = enc.Encode(val)
 		if err != nil {
 			log.Fatalln(err)
