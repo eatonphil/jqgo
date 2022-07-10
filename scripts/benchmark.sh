@@ -7,19 +7,14 @@ if ! [[ -e "large-file.json" ]]; then
     rm tmp.json
 fi
 
-# Using cat
+# hyperfine --warmup 2 \
+# 	  --export-markdown basic-benchmark.md \
+# 	  "cat large-file.json | ./jqgo '.created_at'" \
+# 	  "cat large-file.json | ./control/control '.created_at'" \
+# 	  "cat large-file.json | jq '.created_at'"
 
 hyperfine --warmup 2 \
-	  --export-markdown cat-benchmark.md \
-	  "cat large-file.json | ./jqgo '.created_at'" \
-	  "cat large-file.json | ./control/control '.created_at'" \
-	  "cat large-file.json | jq '.created_at'"
-
-# Using gunzip
-gzip -k large-file.json
-
-hyperfine --warmup 2 \
-	  --export-markdown gunzip-benchmark.md \
-	  "gunzip -c large-file.json.gz | ./jqgo '.created_at'" \
-	  "gunzip -c large-file.json.gz | ./control/control '.created_at'" \
-	  "gunzip -c large-file.json.gz | jq '.created_at'"
+	  --export-markdown object-benchmark.md \
+	  "cat large-file.json | ./jqgo '.payload.release.assets.0.size'" \
+	  "cat large-file.json | ./control/control '.payload.release.assets.0.size'" \
+	  "cat large-file.json | jq '.payload.release.assets[0].size'"
