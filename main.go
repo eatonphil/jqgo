@@ -201,12 +201,12 @@ func (jr *jsonReader) eatValue(r *bufio.Reader) error {
 		return err
 	}
 
-	ok, _, err := jr.tryLiteral(r)
+	ok, _, err := jr.tryScalar(r)
 	if err != nil {
 		return err
 	}
 
-	// It was a literal, we're done!
+	// It was a scalar, we're done!
 	if ok {
 		return nil
 	}
@@ -295,7 +295,7 @@ var (
 	nullBytes  = []byte("null")
 )
 
-func (jr *jsonReader) tryLiteral(r *bufio.Reader) (bool, any, error) {
+func (jr *jsonReader) tryScalar(r *bufio.Reader) (bool, any, error) {
 	c, err := jr.peek(r)
 	if err != nil {
 		return false, nil, err
@@ -339,12 +339,12 @@ func (jr *jsonReader) expectValue(r *bufio.Reader, path [][]byte) (any, error) {
 		return nil, nil
 	}
 
-	ok, val, err := jr.tryLiteral(r)
+	ok, val, err := jr.tryScalar(r)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("Expected literal, got: '%s'", string(c))
+		return nil, fmt.Errorf("Expected scalar, got: '%s'", string(c))
 	}
 
 	return val, err
