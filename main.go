@@ -10,7 +10,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
 	//"github.com/pkg/profile"
 )
 
@@ -46,7 +45,7 @@ func (jr *jsonReader) reset() {
 	jr.read.Reset()
 }
 
-func (jr *jsonReader) readByteRaw(r *bufio.Reader) (byte, error) {
+func (jr *jsonReader) readByte(r *bufio.Reader) (byte, error) {
 	c, err := r.ReadByte()
 	if err != nil {
 		return byte(0), err
@@ -55,10 +54,6 @@ func (jr *jsonReader) readByteRaw(r *bufio.Reader) (byte, error) {
 	jr.read.Append(c)
 
 	return c, nil
-}
-
-func (jr *jsonReader) readByte(r *bufio.Reader) (byte, error) {
-	return jr.readByteRaw(r)
 }
 
 func (jr *jsonReader) discard(r *bufio.Reader) {
@@ -141,14 +136,12 @@ func (jr *jsonReader) expectIdentifier(r *bufio.Reader, ident []byte, value any)
 	jr.expectIdentifierCache.Reset()
 
 	for i := 0; i < len(ident); i++ {
-		b, err := jr.peek(r)
+		b, err := jr.readByte(r)
 		if err != nil {
 			return nil, err
 		}
 
 		jr.expectIdentifierCache.Append(b)
-
-		jr.discard(r)
 	}
 
 	if bytes.Equal(jr.expectIdentifierCache.List(), ident) {

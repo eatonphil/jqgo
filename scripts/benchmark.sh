@@ -17,7 +17,8 @@ hyperfine --warmup 2 \
 	  "cat large-file.json | ./control/control '.repo.url'" \
 	  "cat large-file.json | ./control-goccy/control '.repo.url'" \
 	  "cat large-file.json | ./control-jsoniter/control '.repo.url'" \
-	  "cat large-file.json | jq '.repo.url'"
+	  "cat large-file.json | jq '.repo.url'" \
+	  "cat large-file.json | dasel -p json -m '.[*].repo.url'"
           # pkg/json fails
 	  # "cat large-file.json | ./control-pkgjson/control '.repo.url'" \
 

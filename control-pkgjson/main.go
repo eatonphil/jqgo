@@ -1,12 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"io"
 	"log"
 	"os"
 	"strconv"
 	"strings"
-	"encoding/json"
 
 	json2 "github.com/pkg/json"
 )
@@ -52,7 +52,7 @@ func main() {
 	}
 
 	dec := json2.NewDecoder(os.Stdin)
-	var a map[string]any
+	a := map[string]any{}
 
 	enc := json.NewEncoder(os.Stdout)
 

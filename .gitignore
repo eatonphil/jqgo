@@ -3,3 +3,4 @@ jqgo
 *.pprof
 *.gz
 *-benchmark.md
+control
